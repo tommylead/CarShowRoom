@@ -1,0 +1,10 @@
+{
+  "presets": [
+    "next/babel"
+  ],
+  "plugins": [
+    "@babel/plugin-proposal-private-property-in-object",
+    "@babel/plugin-transform-private-methods",
+    "@babel/plugin-transform-class-properties"
+  ]
+} 
