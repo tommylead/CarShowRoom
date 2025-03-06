@@ -3,8 +3,30 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  USER
+  GUEST
+}
+
+enum OrderStatus {
+  PENDING    // Chờ xác nhận
+  CONFIRMED  // Đã xác nhận
+  PROCESSING // Đang xử lý
+  SHIPPING   // Đang giao hàng
+  COMPLETED  // Đã hoàn thành
+  CANCELLED  // Đã hủy
+}
+
+enum PaymentStatus {
+  PENDING   // Chờ thanh toán
+  PAID      // Đã thanh toán
+  FAILED    // Thanh toán thất bại
+  REFUNDED  // Đã hoàn tiền
 }
 
 model Account {
@@ -37,16 +59,21 @@ model Session {
 model User {
   id            String    @id @default(cuid())
   name          String?
-  email         String?   @unique
+  email         String    @unique
   emailVerified DateTime?
   image         String?
   password      String?
-  role          String    @default("USER")
+  role          Role      @default(USER)
+  firebaseUid   String?   @unique // ID từ Firebase Authentication
+  phone         String?
+  address       String?
   accounts      Account[]
   sessions      Session[]
   orders        Order[]
   reviews       Review[]
-  cartItems     CartItem[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  cart          Cart?
 }
 
 model VerificationToken {
@@ -65,10 +92,12 @@ model Car {
   year        Int
   price       Float
   color       String
-  type        String
-  images      String
-  description String
-  stock       Int         @default(0)
+  category    String      // SUV, Sedan, Coupe,...
+  images      String[]    // Mảng các URL ảnh từ Cloudinary
+  description String      @db.Text
+  features    String[]    // Các tính năng của xe
+  stock       Int         @default(1)
+  viewCount   Int         @default(0)
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
   cartItems   CartItem[]
@@ -76,55 +105,63 @@ model Car {
   reviews     Review[]
 
   @@index([brand])
-  @@index([type])
+  @@index([category])
   @@index([price])
+}
+
+model Cart {
+  id        String     @id @default(cuid())
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String     @unique
+  items     CartItem[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 }
 
 model CartItem {
   id        String   @id @default(cuid())
-  userId    String
+  quantity  Int      @default(1)
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  cartId    String
+  car       Car      @relation(fields: [carId], references: [id])
   carId     String
-  quantity  Int
-  price     Float
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  car       Car      @relation(fields: [carId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([userId, carId])
-  @@index([userId])
-  @@index([carId])
+  @@unique([cartId, carId])
 }
 
 model Order {
   id              String        @id @default(cuid())
+  orderNumber     String        @unique @default(cuid()) // Số đơn hàng hiển thị cho khách
+  user            User          @relation(fields: [userId], references: [id])
   userId          String
   items           OrderItem[]
-  status          String        @default("PENDING")
-  paymentStatus   String        @default("PENDING")
-  paymentMethod   String
+  status          OrderStatus   @default(PENDING)
+  paymentStatus   PaymentStatus @default(PENDING)
+  paymentMethod   String?
   totalAmount     Float
   shippingName    String
   shippingPhone   String
   shippingAddress String
-  note            String?
-  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  note            String?       @db.Text
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
   @@index([userId])
   @@index([status])
   @@index([paymentStatus])
+  @@index([orderNumber])
 }
 
 model OrderItem {
   id        String   @id @default(cuid())
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   orderId   String
+  car       Car      @relation(fields: [carId], references: [id])
   carId     String
   quantity  Int
-  price     Float
-  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  car       Car      @relation(fields: [carId], references: [id], onDelete: Cascade)
+  price     Float    // Giá tại thời điểm đặt hàng
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -134,16 +171,16 @@ model OrderItem {
 
 model Review {
   id        String   @id @default(cuid())
-  userId    String
-  carId     String
-  rating    Int
-  comment   String
+  rating    Int      // 1-5 sao
+  comment   String?  @db.Text
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
   car       Car      @relation(fields: [carId], references: [id], onDelete: Cascade)
+  carId     String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([userId, carId])
-  @@index([userId])
+  @@unique([userId, carId]) // Một user chỉ được review một xe một lần
   @@index([carId])
+  @@index([userId])
 } 
