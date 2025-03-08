@@ -85,24 +85,26 @@ model VerificationToken {
 }
 
 model Car {
-  id          String      @id @default(cuid())
-  name        String
-  brand       String
-  model       String
-  year        Int
-  price       Float
-  color       String
-  category    String      // SUV, Sedan, Coupe,...
-  images      String[]    // Mảng các URL ảnh từ Cloudinary
-  description String      @db.Text
-  features    String[]    // Các tính năng của xe
-  stock       Int         @default(1)
-  viewCount   Int         @default(0)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-  cartItems   CartItem[]
-  orderItems  OrderItem[]
-  reviews     Review[]
+  id              String      @id @default(cuid())
+  name            String
+  brand           String
+  model           String
+  year            Int
+  price           Float
+  color           String
+  category        String      // SUV, Sedan, Coupe,...
+  images          String[]    // Mảng các URL ảnh từ Cloudinary
+  description     String      @db.Text
+  features        String[]    // Các tính năng của xe
+  specifications  Json?       // Thông số kỹ thuật chi tiết
+  stock           Int         @default(1)
+  isAvailable     Boolean     @default(true)
+  viewCount       Int         @default(0)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  cartItems       CartItem[]
+  orderItems      OrderItem[]
+  reviews         Review[]
 
   @@index([brand])
   @@index([category])
@@ -140,10 +142,12 @@ model Order {
   status          OrderStatus   @default(PENDING)
   paymentStatus   PaymentStatus @default(PENDING)
   paymentMethod   String?
+  paymentId       String?       // Mã giao dịch từ cổng thanh toán
   totalAmount     Float
   shippingName    String
   shippingPhone   String
   shippingAddress String
+  deliveryDate    DateTime?     // Ngày giao xe dự kiến
   note            String?       @db.Text
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
