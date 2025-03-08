@@ -1,14 +1,57 @@
-import { redirect } from "next/navigation";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import Link from "next/link";
+'use client';
 
-export default async function AdminDashboard() {
-  // Xác thực Admin
-  const session = await getServerSession(authOptions);
-  
-  if (!session || session.user.role !== "ADMIN") {
-    redirect("/");
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useAuth } from "@/contexts/AuthContext";
+import { Spinner } from "@/components/ui/Spinner";
+
+export default function AdminDashboard() {
+  const { user, loading, isAdmin, refreshToken } = useAuth();
+  const router = useRouter();
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const initializeAdminPage = async () => {
+      try {
+        // Làm mới token để cập nhật quyền mới nhất
+        if (user) {
+          console.log('[AdminPage] Refreshing token...');
+          await refreshToken();
+        }
+        
+        // Chờ auth context được khởi tạo
+        if (!loading) {
+          if (!user) {
+            // Nếu chưa đăng nhập, chuyển về trang đăng nhập
+            console.log('[AdminPage] No user found, redirecting to login');
+            router.push('/auth/login');
+          } else if (!isAdmin) {
+            // Nếu không phải admin, chuyển về trang chủ
+            console.log('[AdminPage] Not admin, redirecting to home');
+            router.push('/');
+          } else {
+            // Nếu là admin, cho phép truy cập trang
+            console.log('[AdminPage] Admin verified, showing dashboard');
+            setIsLoading(false);
+          }
+        }
+      } catch (error) {
+        console.error('[AdminPage] Error initializing admin page:', error);
+        router.push('/');
+      }
+    };
+    
+    initializeAdminPage();
+  }, [user, loading, isAdmin, router, refreshToken]);
+
+  // Hiển thị loading khi đang xác thực
+  if (loading || isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Spinner size="lg" />
+      </div>
+    );
   }
 
   return (

@@ -21,6 +21,7 @@ interface AuthContextType {
   isAdmin: boolean;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
+  refreshToken: () => Promise<string | undefined>;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -29,6 +30,7 @@ const AuthContext = createContext<AuthContextType>({
   isAdmin: false,
   signInWithGoogle: async () => {},
   signOut: async () => {},
+  refreshToken: async () => undefined,
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -37,15 +39,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
   const router = useRouter();
 
+  // Cập nhật token thủ công khi cần
+  const refreshToken = async () => {
+    if (user) {
+      try {
+        console.log('[AuthContext] Manually refreshing token...');
+        const token = await user.getIdToken(true); // true để force refresh
+        Cookies.set('token', token, { expires: 7 });
+        
+        const tokenResult = await user.getIdTokenResult();
+        console.log('[AuthContext] New token claims:', tokenResult.claims);
+        setIsAdmin(tokenResult.claims.role === 'ADMIN');
+        
+        console.log('[AuthContext] Token refreshed successfully, isAdmin:', tokenResult.claims.role === 'ADMIN');
+        return token;
+      } catch (error) {
+        console.error('[AuthContext] Error refreshing token:', error);
+      }
+    }
+  };
+
   // Xử lý authentication state
   useEffect(() => {
     let unsubscribeAuth: () => void;
+    let unsubscribeToken: () => void;
     
     const initializeAuth = async () => {
       if (typeof window === 'undefined') return;
 
+      // Theo dõi thay đổi trạng thái xác thực
       unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
-        console.log('Auth state changed:', currentUser?.displayName);
+        console.log('[AuthContext] Auth state changed, user:', currentUser?.email);
         
         if (currentUser) {
           try {
@@ -54,23 +78,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             Cookies.set('token', token, { expires: 7 });
             
             const tokenResult = await currentUser.getIdTokenResult();
-            setIsAdmin(tokenResult.claims.role === 'ADMIN');
+            console.log('[AuthContext] Token claims:', tokenResult.claims);
+            
+            const hasAdminRole = tokenResult.claims.role === 'ADMIN';
+            console.log('[AuthContext] User has admin role:', hasAdminRole);
+            setIsAdmin(hasAdminRole);
             
             // Cập nhật user state
             setUser(currentUser);
           } catch (error) {
-            console.error('Error handling auth state change:', error);
+            console.error('[AuthContext] Error handling auth state change:', error);
             setUser(null);
             setIsAdmin(false);
             Cookies.remove('token');
           }
         } else {
+          console.log('[AuthContext] User signed out');
           setUser(null);
           setIsAdmin(false);
           Cookies.remove('token');
         }
         
         setLoading(false);
+      });
+
+      // Theo dõi thay đổi token (khi claims được cập nhật)
+      unsubscribeToken = onIdTokenChanged(auth, async (currentUser) => {
+        if (currentUser) {
+          try {
+            console.log('[AuthContext] Token changed, refreshing...');
+            const token = await currentUser.getIdToken();
+            Cookies.set('token', token, { expires: 7 });
+            
+            const tokenResult = await currentUser.getIdTokenResult();
+            const hasAdminRole = tokenResult.claims.role === 'ADMIN';
+            console.log('[AuthContext] Updated claims, isAdmin:', hasAdminRole);
+            setIsAdmin(hasAdminRole);
+          } catch (error) {
+            console.error('[AuthContext] Error handling token change:', error);
+          }
+        }
       });
     };
 
@@ -80,107 +127,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (unsubscribeAuth) {
         unsubscribeAuth();
       }
+      if (unsubscribeToken) {
+        unsubscribeToken();
+      }
     };
   }, []);
 
-  // Đăng nhập với Google
   const signInWithGoogle = async () => {
-    setLoading(true);
-    const toastId = toast.loading("Đang kết nối với Google...");
-    
     try {
       const provider = new GoogleAuthProvider();
-      provider.addScope('profile');
-      provider.addScope('email');
-      
       const result = await signInWithPopup(auth, provider);
-      
-      // Log chi tiết thông tin user
-      console.log('=== FIREBASE USER DATA ===');
-      console.log('Basic Info:', {
-        uid: result.user.uid,
-        email: result.user.email,
-        displayName: result.user.displayName,
-        photoURL: result.user.photoURL,
-        emailVerified: result.user.emailVerified,
-        phoneNumber: result.user.phoneNumber,
-        isAnonymous: result.user.isAnonymous
-      });
-
-      console.log('Metadata:', {
-        creationTime: result.user.metadata.creationTime,
-        lastSignInTime: result.user.metadata.lastSignInTime
-      });
-
-      console.log('Provider Data:', result.user.providerData);
-
-      // Log token result
-      const tokenResult = await result.user.getIdTokenResult();
-      console.log('Token Info:', {
-        token: tokenResult.token.substring(0, 20) + '...', // Chỉ hiện 20 ký tự đầu
-        authTime: tokenResult.authTime,
-        issuedAtTime: tokenResult.issuedAtTime,
-        expirationTime: tokenResult.expirationTime,
-        signInProvider: tokenResult.signInProvider,
-        claims: tokenResult.claims
-      });
-
-      // Cập nhật user state ngay lập tức
-      setUser(result.user);
-      
-      // Lấy token mới
-      const token = await result.user.getIdToken(true);
-      Cookies.set('token', token, { expires: 7 });
-      
-      // Kiểm tra role admin
-      setIsAdmin(tokenResult.claims.role === 'ADMIN');
-      
-      toast.success("Đăng nhập thành công!", { id: toastId });
+      toast.success(`Xin chào, ${result.user.displayName || 'bạn'}!`);
       router.push('/');
     } catch (error: any) {
-      console.error('Google sign in error:', error);
-      if (error.code !== 'auth/cancelled-popup-request') {
-        toast.error(error.message || "Đăng nhập thất bại. Vui lòng thử lại.", { id: toastId });
-      } else {
-        toast.dismiss(toastId);
-      }
-      setUser(null);
-      setIsAdmin(false);
-      Cookies.remove('token');
-    } finally {
-      setLoading(false);
+      console.error('Lỗi đăng nhập Google:', error);
+      toast.error('Đăng nhập thất bại. Vui lòng thử lại.');
     }
   };
 
-  // Đăng xuất
   const signOut = async () => {
-    const toastId = toast.loading("Đang đăng xuất...");
-    
     try {
       await firebaseSignOut(auth);
       Cookies.remove('token');
-      setUser(null);
-      setIsAdmin(false);
-      toast.success('Đã đăng xuất', { id: toastId });
+      toast.success('Đã đăng xuất thành công');
       router.push('/');
-    } catch (error: any) {
-      console.error('Sign out error:', error);
-      toast.error('Có lỗi xảy ra khi đăng xuất', { id: toastId });
-      throw error;
+    } catch (error) {
+      console.error('Lỗi đăng xuất:', error);
+      toast.error('Đăng xuất thất bại');
     }
   };
 
-  const contextValue = {
-    user,
-    loading,
-    isAdmin,
-    signInWithGoogle,
-    signOut,
-  };
-
   return (
-    <AuthContext.Provider value={contextValue}>
-      {!loading && children}
+    <AuthContext.Provider value={{ user, loading, isAdmin, signInWithGoogle, signOut, refreshToken }}>
+      {children}
     </AuthContext.Provider>
   );
 }
