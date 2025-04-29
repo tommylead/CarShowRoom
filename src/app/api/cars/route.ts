@@ -1,119 +1,149 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/lib/auth";
 import { Prisma } from "@prisma/client";
+import admin from 'firebase-admin';
 
 // Danh sách các loại xe hợp lệ
 const validCarTypes = ["SUV", "SEDAN", "COUPE", "TRUCK", "VAN"];
 
-// GET /api/cars - Get all cars with filters
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = parseInt(searchParams.get("limit") || "10");
-    const search = searchParams.get("search") || "";
-    const brand = searchParams.get("brand");
-    const typeParam = searchParams.get("type");
-    const minPrice = parseFloat(searchParams.get("minPrice") || "0");
-    const maxPrice = parseFloat(searchParams.get("maxPrice") || "Infinity");
-    const sortBy = searchParams.get("sortBy") as keyof Prisma.CarScalarFieldEnum || "createdAt";
-    const sortOrder = searchParams.get("sortOrder")?.toLowerCase() === "asc" ? "asc" : "desc";
-
-    const skip = (page - 1) * limit;
-
-    // Xây dựng điều kiện tìm kiếm
-    const whereConditions: any[] = [];
-
-    // Điều kiện tìm kiếm theo từ khóa
-    if (search) {
-      whereConditions.push({
-        OR: [
-          { name: { contains: search } },
-          { brand: { contains: search } },
-          { model: { contains: search } },
-        ],
-      });
-    }
-
-    // Điều kiện lọc theo thương hiệu
-    if (brand) {
-      whereConditions.push({ brand });
-    }
-
-    // Điều kiện lọc theo loại xe
-    if (typeParam && validCarTypes.includes(typeParam)) {
-      whereConditions.push({ type: typeParam });
-    }
-
-    // Điều kiện lọc theo giá
-    whereConditions.push({
-      price: {
-        gte: minPrice,
-        ...(maxPrice !== Infinity && { lte: maxPrice }),
-      },
-    });
-
-    // Nếu không có điều kiện nào, truy vấn tất cả xe
-    const where =
-      whereConditions.length > 0
-        ? { AND: whereConditions }
-        : {};
-
-    // Thực hiện truy vấn
-    const [cars, totalCount] = await Promise.all([
-      prisma.car.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: {
-          [sortBy]: sortOrder,
-        },
+// Khởi tạo Firebase Admin nếu chưa được khởi tạo
+const getFirebaseAdmin = () => {
+  if (!admin.apps.length) {
+    // Đảm bảo private key được xử lý đúng
+    const privateKey = process.env.FIREBASE_PRIVATE_KEY 
+      ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') 
+      : undefined;
+      
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey,
       }),
-      prisma.car.count({ where }),
-    ]);
-
-    return NextResponse.json({
-      data: cars,
-      total: totalCount,
-      page,
-      totalPages: Math.ceil(totalCount / limit),
     });
+  }
+  return admin;
+};
+
+// GET /api/cars - Get all cars with filters
+export async function GET(request: NextRequest) {
+  try {
+    const searchParams = request.nextUrl.searchParams;
+    const brand = searchParams.get('brand');
+    const category = searchParams.get('category');
+    const minPrice = searchParams.get('minPrice');
+    const maxPrice = searchParams.get('maxPrice');
+    const available = searchParams.get('available');
+    const limit = searchParams.get('limit');
+
+    // Xây dựng filter query
+    const filter: Prisma.CarWhereInput = {};
+
+    if (brand) filter.brand = brand;
+    if (category) filter.category = category;
+    if (minPrice || maxPrice) {
+      filter.price = {};
+      if (minPrice) filter.price = { gte: parseFloat(minPrice) };
+      if (maxPrice) filter.price = { ...filter.price as any, lte: parseFloat(maxPrice) };
+    }
+    if (available === 'true') filter.isAvailable = true;
+
+    const cars = await prisma.car.findMany({
+      where: filter,
+      orderBy: { createdAt: 'desc' },
+      take: limit ? parseInt(limit) : undefined,
+    });
+
+    return NextResponse.json(cars);
   } catch (error) {
-    console.error("[CARS_GET]", error);
-    return NextResponse.json({ error: "Lỗi khi truy vấn dữ liệu xe" }, { status: 500 });
+    console.error('Error getting cars:', error);
+    return NextResponse.json(
+      { error: 'Có lỗi xảy ra khi lấy danh sách xe' },
+      { status: 500 }
+    );
   }
 }
 
 // POST /api/cars - Create new car
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const session: any = await getServerSession(authOptions);
+    // Xác thực admin
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json(
+        { error: 'Không có quyền truy cập' },
+        { status: 401 }
+      );
+    }
 
-    if (!session?.user?.role || session.user.role !== "ADMIN") {
-      return NextResponse.json({ error: "Không có quyền truy cập" }, { status: 403 });
+    const token = authHeader.substring(7);
+    const firebaseAdmin = getFirebaseAdmin();
+    
+    try {
+      // Xác thực token Firebase
+      const decodedToken = await firebaseAdmin.auth().verifyIdToken(token);
+      const { uid } = decodedToken;
+
+      // Kiểm tra quyền admin
+      const user = await prisma.user.findFirst({
+        where: { 
+          firebaseUid: uid 
+        },
+      });
+
+      if (!user || user.role !== 'ADMIN') {
+        return NextResponse.json(
+          { error: 'Không có quyền truy cập' },
+          { status: 403 }
+        );
+      }
+    } catch (error) {
+      return NextResponse.json(
+        { error: 'Lỗi xác thực' },
+        { status: 401 }
+      );
     }
 
     const data = await request.json();
 
-    // Chuyển đổi giá trị từ chuỗi sang số (nếu cần)
-    const carData = {
-      ...data,
-      price: typeof data.price === 'string' ? parseFloat(data.price) : data.price,
-      year: typeof data.year === 'string' ? parseInt(data.year) : data.year,
-      stock: typeof data.stock === 'string' ? parseInt(data.stock) : data.stock,
-    };
+    // Validate dữ liệu
+    const { name, brand, model, year, price, color, category, description, features, images, stock, isAvailable } = data;
 
-    const car = await prisma.car.create({
-      data: carData,
+    if (!name || !brand || !model || !year || !price || !color || !category || !description || !features || !images) {
+      return NextResponse.json(
+        { error: 'Vui lòng nhập đầy đủ thông tin xe' },
+        { status: 400 }
+      );
+    }
+
+    // Tạo xe mới
+    const newCar = await prisma.car.create({
+      data: {
+        name,
+        brand,
+        model,
+        year,
+        price,
+        color,
+        category,
+        description,
+        features,
+        images,
+        stock: stock || 1,
+        isAvailable: isAvailable !== undefined ? isAvailable : true,
+      },
     });
 
-    return NextResponse.json(car);
+    return NextResponse.json(newCar, { status: 201 });
   } catch (error) {
-    console.error("[CARS_CREATE]", error);
+    console.error('Error creating car:', error);
     return NextResponse.json(
-      { error: "Lỗi khi tạo xe mới", details: (error as Error).message },
+      { 
+        error: 'Có lỗi xảy ra khi tạo xe mới',
+        details: error instanceof Error ? error.message : String(error) 
+      },
       { status: 500 }
     );
   }

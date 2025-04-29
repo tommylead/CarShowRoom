@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm, SubmitHandler } from 'react-hook-form';
 import { toast } from 'react-hot-toast';
 import ImageUploader from '@/components/admin/ImageUploader';
+import { Car } from '@prisma/client';
 
 type FormValues = {
   name: string;
@@ -17,6 +18,7 @@ type FormValues = {
   description: string;
   features: string;
   stock: number;
+  isAvailable: boolean;
 };
 
 const categories = [
@@ -32,16 +34,60 @@ const categories = [
   'Other'
 ];
 
-export default function AddCarPage() {
+export default function EditCarPage({ params }: { params: { id: string } }) {
   const router = useRouter();
+  const { id } = params;
+  const [car, setCar] = useState<Car | null>(null);
   const [images, setImages] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const {
     register,
     handleSubmit,
     formState: { errors },
+    reset,
+    setValue,
   } = useForm<FormValues>();
+
+  // Tải thông tin xe
+  useEffect(() => {
+    const fetchCar = async () => {
+      try {
+        const response = await fetch(`/api/cars/${id}`);
+        if (!response.ok) {
+          throw new Error('Không thể tải thông tin xe');
+        }
+        const data = await response.json();
+        setCar(data);
+        setImages(data.images || []);
+
+        // Cập nhật form với dữ liệu xe
+        reset({
+          name: data.name,
+          brand: data.brand,
+          model: data.model,
+          year: data.year,
+          price: data.price,
+          color: data.color,
+          category: data.category,
+          description: data.description,
+          features: data.features?.join('\n') || '',
+          stock: data.stock,
+          isAvailable: data.isAvailable,
+        });
+      } catch (error) {
+        console.error('Lỗi khi tải thông tin xe:', error);
+        toast.error('Không thể tải thông tin xe');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    if (id) {
+      fetchCar();
+    }
+  }, [id, reset]);
 
   const onSubmit: SubmitHandler<FormValues> = async (data) => {
     if (images.length === 0) {
@@ -50,7 +96,7 @@ export default function AddCarPage() {
     }
 
     setIsSubmitting(true);
-    const toastId = toast.loading('Đang thêm xe...');
+    const toastId = toast.loading('Đang cập nhật xe...');
 
     try {
       // Chuyển đổi features từ chuỗi thành mảng
@@ -67,12 +113,11 @@ export default function AddCarPage() {
         stock: Number(data.stock),
         features: featuresArray,
         images: images,
-        isAvailable: true,
       };
 
-      // Gửi request API để tạo xe mới
-      const response = await fetch('/api/cars', {
-        method: 'POST',
+      // Gửi request API để cập nhật xe
+      const response = await fetch(`/api/cars/${id}`, {
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
@@ -81,14 +126,14 @@ export default function AddCarPage() {
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.message || 'Có lỗi xảy ra khi thêm xe');
+        throw new Error(errorData.message || 'Có lỗi xảy ra khi cập nhật xe');
       }
 
-      toast.success('Thêm xe thành công', { id: toastId });
+      toast.success('Cập nhật xe thành công', { id: toastId });
       router.push('/admin/cars');
     } catch (error) {
-      console.error('Lỗi khi thêm xe:', error);
-      toast.error(error instanceof Error ? error.message : 'Không thể thêm xe', {
+      console.error('Lỗi khi cập nhật xe:', error);
+      toast.error(error instanceof Error ? error.message : 'Không thể cập nhật xe', {
         id: toastId,
       });
     } finally {
@@ -96,9 +141,32 @@ export default function AddCarPage() {
     }
   };
 
+  if (isLoading) {
+    return (
+      <div className="p-6 flex justify-center items-center h-[calc(100vh-200px)]">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
+      </div>
+    );
+  }
+
+  if (!car) {
+    return (
+      <div className="p-6">
+        <h1 className="text-2xl font-bold mb-6">Không tìm thấy xe</h1>
+        <p className="mb-4">Không thể tìm thấy thông tin xe với ID đã cung cấp.</p>
+        <button
+          onClick={() => router.back()}
+          className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+        >
+          Quay lại
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-6">Thêm xe mới</h1>
+      <h1 className="text-2xl font-bold mb-6">Cập nhật xe</h1>
 
       <div className="bg-white rounded-lg shadow p-6">
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
@@ -258,6 +326,19 @@ export default function AddCarPage() {
                 <p className="mt-1 text-sm text-red-600">{errors.stock.message}</p>
               )}
             </div>
+
+            {/* Trạng thái */}
+            <div className="flex items-center space-x-2">
+              <input
+                id="isAvailable"
+                type="checkbox"
+                {...register('isAvailable')}
+                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+              />
+              <label htmlFor="isAvailable" className="text-sm font-medium text-gray-700">
+                Đang bán
+              </label>
+            </div>
           </div>
 
           {/* Mô tả */}
@@ -315,7 +396,7 @@ export default function AddCarPage() {
               disabled={isSubmitting}
               className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isSubmitting ? 'Đang xử lý...' : 'Thêm xe'}
+              {isSubmitting ? 'Đang xử lý...' : 'Lưu thay đổi'}
             </button>
           </div>
         </form>
